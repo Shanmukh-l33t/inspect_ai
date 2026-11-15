@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import wraps
 from logging import getLogger
 from typing import (
     TYPE_CHECKING,
@@ -30,10 +31,13 @@ from inspect_ai._util.logger import warn_once
 from inspect_ai._util.notgiven import NOT_GIVEN, NotGiven
 from inspect_ai._util.registry import (
     RegistryInfo,
+    has_registry_params,
     is_registry_object,
     registry_info,
+    registry_params,
     registry_unqualified_name,
     set_registry_info,
+    set_registry_params,
 )
 from inspect_ai.agent._agent import Agent, is_agent
 from inspect_ai.agent._as_solver import as_solver
@@ -716,11 +720,38 @@ def resolve_scorer_metrics(
     metrics: list[Metric | dict[str, list[Metric]]] | dict[str, list[Metric]] | None,
 ) -> list[Scorer] | None:
     if scorers is not None and metrics is not None:
-        for scorer in scorers:
-            scorer_info = registry_info(scorer)
-            new_metadata = {**scorer_info.metadata, "metrics": metrics}
-            new_info = RegistryInfo(
-                type=scorer_info.type, name=scorer_info.name, metadata=new_metadata
-            )
-            set_registry_info(scorer, new_info)
+        return [_scorer_with_metrics(scorer, metrics) for scorer in scorers]
     return scorers
+
+
+def _scorer_with_metrics(
+    scorer: Scorer,
+    metrics: list[Metric | dict[str, list[Metric]]] | dict[str, list[Metric]],
+) -> Scorer:
+    """Scorer with the same behaviour as `scorer` but carrying `metrics`.
+
+    Results are computed with the metrics recorded on the scorers they are
+    given, so writing the metrics into the caller's scorer would also change
+    the results of every other task or `score()` call holding that same scorer
+    object. A scorer is a function, and `copy.copy()` returns the same function
+    (so its registry attributes cannot be separated from it), so delegate to it
+    from a copy that has registry info of its own instead.
+    """
+    scorer_info = registry_info(scorer)
+
+    @wraps(scorer)
+    async def score_with_metrics(*args: Any, **kwargs: Any) -> Any:
+        return await scorer(*args, **kwargs)
+
+    set_registry_info(
+        score_with_metrics,
+        RegistryInfo(
+            type=scorer_info.type,
+            name=scorer_info.name,
+            metadata={**scorer_info.metadata, "metrics": metrics},
+        ),
+    )
+    # name and options are part of the log's scorer spec, so keep them
+    if has_registry_params(scorer):
+        set_registry_params(score_with_metrics, dict(registry_params(scorer)))
+    return cast(Scorer, score_with_metrics)
