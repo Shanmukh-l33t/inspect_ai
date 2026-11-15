@@ -95,10 +95,24 @@ def match_str(
         # "25".endswith("5") is True but 25 != 5.
         v = strip_numeric_punctuation(v)
         t = normalize_number(t)
+        if location != "exact":
+            # a math-tuned model frequently wraps its final answer, e.g.
+            # "ANSWER: \boxed{126}". Left wrapped, the token does not parse
+            # and the end-of-value scan below would step past it into the
+            # reasoning and grade a number from the working. exact is
+            # excluded: it stays actually exact, wrappers included.
+            v = _unwrap_answer_wrappers(v)
         words = re.split(r"\s+", v)
         if location == "begin":
             v = first_number_normalized(words)
         elif location == "end":
+            # scan only the text after the last answer marker ("Answer: 42",
+            # "the result is 42") when there is one, so an announced final
+            # answer that does not parse scores as no number rather than
+            # falling through into the reasoning that precedes it
+            markers = list(_ANSWER_MARKER.finditer(v))
+            if markers:
+                words = re.split(r"\s+", v[markers[-1].end() :])
             words.reverse()
             v = first_number_normalized(words)
         elif location == "exact":
@@ -137,6 +151,52 @@ def match_str(
 # FULLWIDTH FULL STOP is excluded too: like ASCII ".", it is a decimal
 # separator ("．42" is 0.42).
 _NUMERIC_PUNCTUATION_TRIM = "!?:;()[]{}'\"`！？：；（）［］｛｝＇＂｀。「」『』【】"
+
+# Same marker vocabulary as the math() scorer (_math.py), so both scorers
+# announce a final answer the same way. The trailing "is\b|[:=]" keeps it
+# from firing on ordinary prose ("the answer is not known") and on
+# arithmetic ("9 * 2 = 18"), which is working, not an announced answer. No
+# IGNORECASE flag: the value is already casefolded when ignore_case is on,
+# and a caller who turned case folding off should not get it back here.
+_ANSWER_MARKER = re.compile(r"(?:final\s+answer|answer|result)\s*(?:is\b|[:=])\s*")
+
+# Final answers wrapped in a LaTeX box, e.g. "\boxed{18}", "\fbox{18}", or a
+# bare "boxed{18}". Mirrors _BOX_START in _math.py.
+_BOX_START = re.compile(
+    r"(?:\\(?:beginboxed|boxed|fbox)|(?<![A-Za-z\\])(?:boxed|fbox|oxed))\s*\{"
+)
+
+
+def _unwrap_answer_wrappers(value: str, max_depth: int = 8) -> str:
+    r"""Replace each answer wrapper with the text it encloses.
+
+    "\boxed{18}" becomes "18" and "\boxed{\boxed{18}}" likewise, so the
+    numeric scan sees the answer itself instead of an unparseable token.
+    An unterminated wrapper is left as is: there is no answer inside it to
+    recover, and the rest of the value is still scanned normally.
+    """
+    for _ in range(max_depth):
+        box = _BOX_START.search(value)
+        if box is None:
+            break
+        close = _find_matching_brace(value, box.end() - 1)
+        if close is None:
+            break
+        value = value[: box.start()] + value[box.end() : close] + value[close + 1 :]
+    return value
+
+
+def _find_matching_brace(value: str, open_index: int) -> int | None:
+    """Index of the brace closing the one at `open_index`, or None."""
+    depth = 0
+    for index in range(open_index, len(value)):
+        if value[index] == "{":
+            depth += 1
+        elif value[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
 
 
 def _clean_numeric_word(s: str) -> str:

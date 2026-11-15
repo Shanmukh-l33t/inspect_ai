@@ -12,7 +12,7 @@ def match(
     ignore_case: bool = True,
     numeric: bool = False,
 ) -> Scorer:
-    """Scorer which matches text or a number.
+    r"""Scorer which matches text or a number.
 
     Args:
        location: Location to match at. "any" matches anywhere in the
@@ -27,7 +27,12 @@ def match(
           will not match a numeric target of `60`. To accept a
           percentage-formatted answer, pass both forms as targets, e.g.
           `Target(["60", "60%"])`, where the non-numeric `"60%"` is
-          matched as a string.
+          matched as a string. A final answer wrapped in a LaTeX box
+          (`\boxed{18}`) is unwrapped first, and with `location="end"`
+          the scan starts after the last answer marker (`Answer: 42`,
+          `the result is 42`), so an announced final answer that does
+          not parse scores as no answer instead of being replaced by a
+          number from the reasoning above it.
     """
 
     def check(value: str, target: str) -> tuple[str, bool]:
