@@ -132,12 +132,15 @@ def test_task_metrics_do_not_change_a_shared_scorer():
         name="by_passage",
     )
 
-    # the task carries a scorer of its own, named and parameterised like the
-    # one it was given, so its log records the same scorer spec
+    # the task's scorer reports the metrics the task asked for, and it is named
+    # and parameterised like the one it was given, so its log records the same
+    # scorer spec
     assert by_passage.scorer is not None
-    assert by_passage.scorer[0] is not shared
     assert registry_unqualified_name(by_passage.scorer[0]) == "includes"
     assert registry_params(by_passage.scorer[0]) == {}
+    task_metrics = scorer_metrics(by_passage.scorer[0])
+    assert isinstance(task_metrics, list)
+    assert registry_params(task_metrics[1]) == {"cluster": "passage"}
 
     # creating the second task leaves the shared scorer's own metrics alone
     shared_metrics = scorer_metrics(shared)
