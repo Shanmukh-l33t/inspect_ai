@@ -482,6 +482,45 @@ def test_prose_wrapped_numeric_answers_are_extracted(answer: str, target: str) -
     assert _score_answer(answer, (target,)).status == "correct"
 
 
+# Working that mentions the target on the way to a different answer, so the
+# wrong-answer cases below can only pass if the marker's own answer is read.
+_MARKER_WORKING = (
+    "The base is 6 and the height is 7, so the triangle's area is "
+    "$\\frac{1}{2} \\cdot 6 \\cdot 7 = 21$. Doubling gives the rectangle.\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    "answer,target,expected",
+    [
+        # Bold markers leave an unpaired closing run in the extracted answer;
+        # leaving it in place makes the candidate unparseable.
+        ("**Answer: 42**", "42", "correct"),
+        ("**Answer: 42**.", "42", "correct"),
+        # `is:` used to leave the colon in the candidate (": 7/2").
+        ("The answer is: 7/2", "7/2", "correct"),
+        (_MARKER_WORKING + "**Answer: 2\\sqrt{3}**", "2\\sqrt{3}", "correct"),
+        # A wrong stated answer must not be rescued by the target appearing in
+        # the working, which is what the prose fallback did once the marker
+        # candidate failed to parse.
+        (_MARKER_WORKING + "**Answer: 42**.", "21", "incorrect"),
+        (_MARKER_WORKING + "The answer is: 42", "21", "incorrect"),
+    ],
+    ids=[
+        "bold",
+        "bold-period",
+        "is-colon",
+        "bold-latex",
+        "bold-wrong",
+        "is-colon-wrong",
+    ],
+)
+def test_answer_marker_forms_score_the_stated_answer(
+    answer: str, target: str, expected: str
+) -> None:
+    assert _score_answer(answer, (target,)).status == expected
+
+
 @pytest.mark.parametrize(
     "answer,target",
     [

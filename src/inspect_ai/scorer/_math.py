@@ -57,7 +57,9 @@ _MATH_WORKERS = 1
 _BOX_START = re.compile(
     r"(?:\\(?:beginboxed|boxed|fbox)|(?<![A-Za-z\\])(?:boxed|fbox|oxed))\s*\{"
 )
-_ANSWER_MARKER = re.compile(r"(?i)(?:final\s+answer|answer|result)\s*(?:is\b|[:=])\s*")
+_ANSWER_MARKER = re.compile(
+    r"(?i)(?:final\s+answer|answer|result)\s*(?:is\b\s*[:=]?|[:=])\s*"
+)
 _NUMBER = re.compile(
     r"[-+]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)"
     r"(?:[eE][-+]?\d+)?\s*%?"
@@ -315,6 +317,32 @@ def _strip_delimiters(text: str) -> str:
     return text.rstrip(" \t\r\n.,;:")
 
 
+def _strip_marker_emphasis(text: str | None) -> str | None:
+    """Drop the emphasis run an answer marker wrapped the answer in.
+
+    A marker inside emphasis leaves only its closing run behind
+    (`**Answer: 42**` yields `42**`), which has no partner in the extracted
+    answer, so the candidate fails to parse and the score falls through to the
+    prose fallback. Only an unpaired edge run is removed, leaving answers that
+    emphasise a unit (`12 *units*`) and paired delimiters (`**42**`) intact. A
+    star following a backslash or a caret belongs to the LaTeX, not to the
+    emphasis.
+    """
+    if text is None:
+        return None
+    while True:
+        # Punctuation between the value and the closing run (`**Answer: 42**.`)
+        # would hide the run from the edge scan.
+        text = text.rstrip(" \t\r\n.,;:")
+        match = re.search(r"[*_]+\Z", text)
+        if match is None:
+            return text
+        rest = text[: match.start()]
+        if rest.endswith(("\\", "^")) or match.group(0)[0] in rest:
+            return text
+        text = rest
+
+
 def _append_candidate(candidates: list[str], candidate: str | None) -> None:
     if candidate is None:
         return
@@ -338,7 +366,8 @@ def _answer_candidates(text: str) -> list[str]:
         last_marker = match
     if last_marker is not None:
         suffix = text[last_marker.end() :]
-        _append_candidate(candidates, suffix.splitlines()[0] if suffix else None)
+        first_line = suffix.splitlines()[0] if suffix else None
+        _append_candidate(candidates, _strip_marker_emphasis(first_line))
 
     if _is_short_composite_answer(text):
         _append_candidate(candidates, text)
