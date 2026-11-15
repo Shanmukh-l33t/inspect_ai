@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.291](https://github.com/UKGovernmentBEIS/inspect_ai/compare/0.3.290...0.3.291) (2026-11-15)
+
+
+### Bug Fixes
+
+* Anthropic usage undercounted when a request compacts its context ([#6390](https://github.com/UKGovernmentBEIS/inspect_ai/issues/6390)) ([998f93a](https://github.com/UKGovernmentBEIS/inspect_ai/commit/998f93ab4126d760cdbba16af40cde9d24f50dd4))
+* samples_df no longer uses pandas' deprecated drop_duplicates(inplace=True) ([#6383](https://github.com/UKGovernmentBEIS/inspect_ai/issues/6383)) ([a3b8090](https://github.com/UKGovernmentBEIS/inspect_ai/commit/a3b8090965f96f27f51dfdd00bf99d2c42cda5a6))
+* tools with an `Enum`, `date` or `Path` parameter default failing every model call ([#6458](https://github.com/UKGovernmentBEIS/inspect_ai/issues/6458)) ([f68c610](https://github.com/UKGovernmentBEIS/inspect_ai/commit/f68c610e99f04829045ab8ebe75b2b8bd71dc042))
+
 ## [0.3.290](https://github.com/UKGovernmentBEIS/inspect_ai/compare/0.3.289...0.3.290) (2026-11-13)
 
 
