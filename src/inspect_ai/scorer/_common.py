@@ -82,6 +82,15 @@ def match_str(
     # baseline answer (will only change for numeric)
     answer = v
 
+    # A target that is only punctuation ("-", ".", "--": CSV null markers) keeps
+    # no content once normalized, and an empty target matches every value
+    # ("".endswith("") is True, "" is in anything), so it would grade every
+    # completion CORRECT. Nothing is the answer to a target with no answer.
+    # A genuinely empty target is left as it is: an empty completion is already
+    # tagged no_response, and empty-target semantics are a separate question.
+    if t and not strip_punctuation(t):
+        return answer, False
+
     # further cleanup
     if ignore_case:
         v = v.casefold()

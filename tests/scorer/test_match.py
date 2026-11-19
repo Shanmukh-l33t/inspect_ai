@@ -2,6 +2,7 @@ import pytest
 from test_helpers.utils import simple_task_state
 
 from inspect_ai.scorer import CORRECT, INCORRECT, Target, match
+from inspect_ai.scorer._common import match_str
 
 
 @pytest.mark.anyio
@@ -574,3 +575,35 @@ async def test_numeric_match_digit_run_outside_float_range():
     result = await scorer(state, Target(["10" + "0" * 309]))
     assert result is not None
     assert result.text == INCORRECT
+
+
+@pytest.mark.parametrize("target", ["-", ".", "--", "!!", "  -  "])
+@pytest.mark.parametrize("location", ["begin", "end", "any", "exact"])
+def test_punctuation_only_target_never_matches(target, location):
+    # "-", "." and "--" are CSV null markers: stripping punctuation leaves an
+    # empty target, and an empty target matches everything. No completion is
+    # the answer to a target that carries no answer.
+    for value in ("Paris", " completely wrong answer ", "42", ""):
+        _, matched = match_str(value, target, location=location)
+        assert not matched, (value, target, location)
+
+
+def test_punctuation_only_target_never_matches_numeric():
+    _, matched = match_str("60", "-", numeric=True)
+    assert not matched
+
+
+@pytest.mark.anyio
+async def test_punctuation_only_target_scores_incorrect():
+    scorer = match()
+    state = simple_task_state(model_output=" completely wrong answer ")
+    result = await scorer(state, Target(["-"]))
+
+    assert result.text == INCORRECT
+
+
+@pytest.mark.anyio
+async def test_normal_target_still_matches():
+    # the degenerate-target guard must not change ordinary matching
+    _, matched = match_str("Paris", "Paris", location="end")
+    assert matched
