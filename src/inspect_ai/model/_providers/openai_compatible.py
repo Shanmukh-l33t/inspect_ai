@@ -50,6 +50,7 @@ from .._model_output import ChatCompletionChoice, ModelOutput
 from .._openai import (
     OpenAIResponseError,
     always_reasons_model,
+    apply_initial_system_checkpoint,
     is_gpt_5_model,
     is_gpt_5_plus_model,
     is_o_series_model,
@@ -63,6 +64,7 @@ from .._openai import (
     openai_handle_stream_error,
     openai_media_filter,
     reasons_by_default_model,
+    resolve_explicit_prompt_cache,
     supports_native_max_reasoning_effort,
 )
 from .._stream import model_stream_requested
@@ -288,6 +290,20 @@ class OpenAICompatibleAPI(ModelAPI):
             if handler:
                 input = chat_api_messages_for_handler(input, tools, handler)
 
+            # explicit cache breakpoints (ContentText.cache_breakpoint); any
+            # ineligible condition falls back to normal implicit caching for the
+            # whole request (see resolve_explicit_prompt_cache)
+            explicit_cache = self.supports_explicit_prompt_cache() and (
+                resolve_explicit_prompt_cache(
+                    input, self.service_model_name(), config.cache_prompt
+                )
+            )
+            if explicit_cache:
+                # retain a checkpoint at the end of the initial system/developer
+                # block (cumulatively covering preceding tools) when the caller
+                # left it unmarked (see `apply_initial_system_checkpoint`).
+                input = apply_initial_system_checkpoint(input)
+
             # allocate request_id (so we can see it from ModelCall)
             with self._http_hooks.request() as request_id:
                 # get completion params (slice off service from model name)
@@ -299,7 +315,9 @@ class OpenAICompatibleAPI(ModelAPI):
                 # prepare request (we do this so we can log the ModelCall)
                 have_tools = (len(tools) > 0) and not self.emulate_tools
                 request = dict(
-                    messages=await self.messages_to_openai(input),
+                    messages=await self.messages_to_openai(
+                        input, cache_breakpoints=explicit_cache
+                    ),
                     tools=self.tools_to_openai(tools) if have_tools else NOT_GIVEN,
                     tool_choice=openai_chat_tool_choice(tool_choice)
                     if have_tools
@@ -309,6 +327,8 @@ class OpenAICompatibleAPI(ModelAPI):
                     | (config.extra_headers or {}),
                     **completion_params,
                 )
+                if explicit_cache:
+                    request["prompt_cache_options"] = {"mode": "explicit"}
 
                 # resolve streaming and mutate the request accordingly before the
                 # ModelCall snapshot below, so the logged request matches the wire
@@ -504,10 +524,20 @@ class OpenAICompatibleAPI(ModelAPI):
 
         Not sent by default: other OpenAI-compatible providers' support for
         these fields is unverified. A provider that documents them overrides
-        this. Explicit cache breakpoints (`supports_explicit_prompt_cache`) are
-        not enabled for any OpenAI-compatible provider.
+        this.
         """
         return PromptCacheParams(key=NOT_GIVEN, retention=NOT_GIVEN)
+
+    def supports_explicit_prompt_cache(self) -> bool:
+        """Whether this service accepts OpenAI's explicit prompt-cache fields.
+
+        Off by default: `prompt_cache_options` and `prompt_cache_breakpoint`
+        are OpenAI extensions, and another OpenAI-compatible service accepting
+        them is unverified. A provider that documents them overrides this;
+        whether a particular request qualifies is still decided per call by
+        `resolve_explicit_prompt_cache`.
+        """
+        return False
 
     def request_headers(self, config: GenerateConfig) -> dict[str, str]:
         """Provider-specific headers to send with this request.
@@ -567,9 +597,9 @@ class OpenAICompatibleAPI(ModelAPI):
         return openai_tools
 
     async def messages_to_openai(
-        self, input: list[ChatMessage]
+        self, input: list[ChatMessage], cache_breakpoints: bool = False
     ) -> list[ChatCompletionMessageParam]:
-        return await messages_to_openai(input)
+        return await messages_to_openai(input, cache_breakpoints=cache_breakpoints)
 
     def chat_choices_from_completion(
         self, completion: ChatCompletion, tools: list[ToolInfo]

@@ -224,7 +224,7 @@ class OpenRouterAPI(OpenAICompatibleAPI):
 
     @override
     async def messages_to_openai(
-        self, input: list[ChatMessage]
+        self, input: list[ChatMessage], cache_breakpoints: bool = False
     ) -> list[ChatCompletionMessageParam]:
         # Reasoning captured as OpenRouter reasoning_details is replayed
         # structurally (see sanitize_reasoning_details_for_replay), never via
@@ -267,7 +267,12 @@ class OpenRouterAPI(OpenAICompatibleAPI):
             return f"<think>\n{readable}\n</think>"
 
         return [
-            await openai_chat_message(message, "system", handle_reasoning_details)
+            await openai_chat_message(
+                message,
+                "system",
+                handle_reasoning_details,
+                cache_breakpoints=cache_breakpoints,
+            )
             for message in input
         ]
 
@@ -346,6 +351,18 @@ class OpenRouterAPI(OpenAICompatibleAPI):
         ):
             return False
         return True
+
+    @override
+    def supports_explicit_prompt_cache(self) -> bool:
+        """OpenRouter honors OpenAI's explicit prompt-cache fields for OpenAI models.
+
+        OpenRouter documents `prompt_cache_options` and
+        `prompt_cache_breakpoint` on Chat Completions for OpenAI gpt-5.6+ only,
+        so every other route keeps its own caching: Anthropic-routed models get
+        `cache_control` from `_add_anthropic_cache_markers` instead.
+        """
+        name = self.service_model_name().removeprefix("openrouter/").lower()
+        return name.startswith("openai/")
 
     @override
     def auto_streamable(self, config: GenerateConfig) -> bool:

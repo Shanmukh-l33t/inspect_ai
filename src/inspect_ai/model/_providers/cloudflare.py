@@ -64,9 +64,11 @@ class CloudFlareAPI(OpenAICompatibleAPI):
     # messages with empty content
     @override
     async def messages_to_openai(
-        self, input: list[ChatMessage]
+        self, input: list[ChatMessage], cache_breakpoints: bool = False
     ) -> list[ChatCompletionMessageParam]:
-        return fill_empty_assistant_content(await super().messages_to_openai(input))
+        return fill_empty_assistant_content(
+            await super().messages_to_openai(input, cache_breakpoints=cache_breakpoints)
+        )
 
     @override
     def request_headers(self, config: GenerateConfig) -> dict[str, str]:

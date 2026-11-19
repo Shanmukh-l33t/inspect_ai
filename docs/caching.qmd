@@ -160,6 +160,8 @@ Explicit marks are supported on the leading system message and on ordinary user/
 
 OpenAI's `gpt-5.6` and later models support the same `ContentText(cache_breakpoint=True)` marker on user and system/developer message text blocks. Unmarked requests use OpenAI's automatic (implicit) caching as they always have; marking a block switches the request to explicit mode for that call, so only the marked boundaries are cache points. OpenAI's guide distinguishes a 4-write-per-request budget from a much larger lookup history (the first two and latest fifty explicit markers) and documents no cap on the number of markers a request may supply, so Inspect applies none — unlike Anthropic's genuine 4-breakpoint request limit. Earlier OpenAI models silently keep the model's normal implicit caching instead of sending the (rejected) explicit fields. When an otherwise-supported explicit request leaves its leading system/developer block unmarked, Inspect also retains a checkpoint at the end of that block (cumulatively covering any preceding tool definitions), so the stable prefix has a boundary to reuse when a later marked block changes; a caller's own mark on that block takes priority and suppresses this automatic one.
 
+The same holds for OpenAI models reached through OpenRouter (`openrouter/openai/gpt-5.6` and later), which accepts these fields on Chat Completions. OpenRouter's other routes are unaffected: `openrouter/anthropic/*` models keep their `cache_control` breakpoints, and models from other vendors receive no explicit-cache fields.
+
 ### Usage Reporting
 
 When using provider caching, model token usage will be reported with 4 distinct values rather than the normal input and output. For example:

@@ -168,9 +168,11 @@ class MoonshotAPI(OpenAICompatibleAPI):
     # the API rejects assistant messages with empty content
     @override
     async def messages_to_openai(
-        self, input: list[ChatMessage]
+        self, input: list[ChatMessage], cache_breakpoints: bool = False
     ) -> list[ChatCompletionMessageParam]:
-        return fill_empty_assistant_content(await super().messages_to_openai(input))
+        return fill_empty_assistant_content(
+            await super().messages_to_openai(input, cache_breakpoints=cache_breakpoints)
+        )
 
     @override
     def handle_bad_request(self, ex: APIStatusError) -> ModelOutput | Exception:

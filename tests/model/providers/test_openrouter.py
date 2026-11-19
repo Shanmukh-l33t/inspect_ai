@@ -1,10 +1,19 @@
-"""Tests for the OpenRouter provider's Anthropic prompt-caching support."""
+"""Tests for the OpenRouter provider's prompt-caching support."""
 
 import json
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
+from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.chat_completion import Choice
 
+from inspect_ai._util.content import Content, ContentText
+from inspect_ai.model._chat_message import (
+    ChatMessage,
+    ChatMessageSystem,
+    ChatMessageUser,
+)
 from inspect_ai.model._generate_config import GenerateConfig
 from inspect_ai.model._model_call import ModelCall
 from inspect_ai.model._model_output import ModelOutput, ModelUsage
@@ -683,16 +692,12 @@ async def test_openrouter_responses_api_does_not_send_explicit_cache_fields(
 ) -> None:
     """Assert no explicit-cache fields leak through OpenRouter's shared Responses path.
 
-    OpenRouter (and other OpenAI-compatible providers) must not send
-    OpenAI's `prompt_cache_options`/`prompt_cache_breakpoint` fields even
-    when routed through generate_responses with responses_api=True and a
-    model name matching OpenAI's gpt-5.6+ naming pattern.
-
-    generate_responses is shared with the direct OpenAI provider; only that
-    provider has verified support for these fields (live-tested against
-    the real API). OpenRouter's actual acceptance of them is unverified,
-    so ContentText.cache_breakpoint marks must stay unsupported here and
-    fall back to whatever implicit caching the model/provider already does
+    OpenRouter accepts `prompt_cache_options`/`prompt_cache_breakpoint` on
+    Chat Completions (see the tests below), but its Responses path is built by
+    `generate_responses`, which is shared with the direct OpenAI provider and
+    gates the fields on the caller passing `supports_explicit_prompt_cache`.
+    OpenRouter does not, so a mark on an input block must stay unsupported here
+    and fall back to whatever implicit caching the model/provider already does
     — see the `supports_explicit_prompt_cache` gate in
     `_providers/openai_responses.py::generate_responses`.
     """
@@ -772,3 +777,222 @@ async def test_openrouter_responses_api_does_not_send_explicit_cache_fields(
         if isinstance(content, list):
             for block in content:
                 assert "prompt_cache_breakpoint" not in block
+
+
+# -- OpenAI explicit prompt caching (openrouter/openai/*) ----------------------
+
+_EXPLICIT: dict[str, str] = {"mode": "explicit"}
+
+
+def _chat_completion() -> ChatCompletion:
+    return ChatCompletion.model_construct(
+        id="chatcmpl-test",
+        created=0,
+        model="gpt-5.6-luna",
+        object="chat.completion",
+        choices=[
+            Choice.model_construct(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage.model_construct(
+                    role="assistant", content="ok"
+                ),
+            )
+        ],
+    )
+
+
+async def _request_for(
+    api: OpenRouterAPI,
+    input: list[ChatMessage],
+    monkeypatch: pytest.MonkeyPatch,
+    config: GenerateConfig | None = None,
+) -> dict[str, Any]:
+    """The kwargs OpenRouter hands to chat.completions.create for this input."""
+    mock_create = AsyncMock(return_value=_chat_completion())
+    monkeypatch.setattr(api.client.chat.completions, "create", mock_create)
+    try:
+        await api.generate(
+            input=input,
+            tools=[],
+            tool_choice="auto",
+            config=config or GenerateConfig(),
+        )
+    finally:
+        await api.aclose()
+    return dict(mock_create.call_args.kwargs)
+
+
+def _breakpoint_parts(texts: list[str], marked: int | None) -> list[Content]:
+    return [
+        ContentText(text=text, cache_breakpoint=index == marked)
+        for index, text in enumerate(texts)
+    ]
+
+
+@pytest.mark.anyio
+async def test_openrouter_marks_marked_text_part_for_openai_gpt_5_6(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marked text part is sent as prompt_cache_breakpoint, request opts in."""
+    api = _make_api("openai/gpt-5.6-luna")
+    request = await _request_for(
+        api,
+        [ChatMessageUser(content=_breakpoint_parts(["rubric", "item a", "item b"], 0))],
+        monkeypatch,
+    )
+
+    assert request["prompt_cache_options"] == _EXPLICIT
+    parts = request["messages"][0]["content"]
+    assert parts[0]["prompt_cache_breakpoint"] == _EXPLICIT
+    assert parts[0]["text"] == "rubric"
+    assert "prompt_cache_breakpoint" not in parts[1]
+    assert "prompt_cache_breakpoint" not in parts[2]
+
+
+@pytest.mark.anyio
+async def test_openrouter_marks_leading_system_block_for_openai_gpt_5_6(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The initial system block gets its own breakpoint when the caller marked none."""
+    api = _make_api("openai/gpt-5.6-luna")
+    request = await _request_for(
+        api,
+        [
+            ChatMessageSystem(content=[ContentText(text="rubric")]),
+            ChatMessageUser(content=_breakpoint_parts(["item a", "item b"], 0)),
+        ],
+        monkeypatch,
+    )
+
+    system_parts = request["messages"][0]["content"]
+    assert system_parts[-1]["prompt_cache_breakpoint"] == _EXPLICIT
+    user_parts = request["messages"][1]["content"]
+    assert user_parts[0]["prompt_cache_breakpoint"] == _EXPLICIT
+
+
+@pytest.mark.anyio
+async def test_openrouter_omits_explicit_cache_before_gpt_5_6(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-gpt-5.6 OpenAI models are implicit-only, so no fields are sent."""
+    api = _make_api("openai/gpt-5.5")
+    request = await _request_for(
+        api,
+        [ChatMessageUser(content=_breakpoint_parts(["rubric", "item"], 0))],
+        monkeypatch,
+    )
+
+    assert "prompt_cache_options" not in request
+    assert "prompt_cache_breakpoint" not in request["messages"][0]["content"][0]
+
+
+@pytest.mark.anyio
+async def test_openrouter_omits_explicit_cache_for_non_openai_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only OpenAI-routed models take the fields; other families are untouched."""
+    api = _make_api("meta-llama/llama-3.3-70b-instruct")
+    request = await _request_for(
+        api,
+        [ChatMessageUser(content=_breakpoint_parts(["rubric", "item"], 0))],
+        monkeypatch,
+    )
+
+    assert "prompt_cache_options" not in request
+    assert "prompt_cache_breakpoint" not in request["messages"][0]["content"][0]
+
+
+@pytest.mark.anyio
+async def test_openrouter_omits_explicit_cache_when_cache_prompt_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`cache_prompt=False` suppresses the marks, same as the direct OpenAI provider."""
+    api = _make_api("openai/gpt-5.6-luna")
+    request = await _request_for(
+        api,
+        [ChatMessageUser(content=_breakpoint_parts(["rubric", "item"], 0))],
+        monkeypatch,
+        config=GenerateConfig(cache_prompt=False),
+    )
+
+    assert "prompt_cache_options" not in request
+    assert "prompt_cache_breakpoint" not in request["messages"][0]["content"][0]
+
+
+@pytest.mark.anyio
+async def test_openrouter_anthropic_model_keeps_cache_control_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anthropic-routed models stay on cache_control; no OpenAI explicit fields."""
+    api = _make_api("anthropic/claude-haiku-4.5")
+    request = await _request_for(
+        api,
+        [ChatMessageUser(content=_breakpoint_parts(["rubric", "item"], 0))],
+        monkeypatch,
+    )
+
+    assert "prompt_cache_options" not in request
+    for message in request["messages"]:
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                assert "prompt_cache_breakpoint" not in block
+
+
+@pytest.mark.anyio
+async def test_openrouter_serializes_explicit_cache_fields() -> None:
+    """Both fields reach the request body in OpenRouter's documented shape."""
+    import httpx2
+    from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+
+    body: dict[str, Any] = {}
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        body.update(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "openai/gpt-5.6-luna",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "ok"},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 1,
+                    "total_tokens": 6,
+                },
+            },
+        )
+
+    api = _make_api("openai/gpt-5.6-luna")
+    api.client = AsyncOpenAI(
+        api_key="test-key",
+        base_url="https://openrouter.ai/api/v1",
+        http_client=DefaultAsyncHttpxClient(transport=httpx2.MockTransport(handle)),
+    )
+    try:
+        await api.generate(
+            input=[
+                ChatMessageUser(
+                    content=_breakpoint_parts(["rubric", "item a", "item b"], 0)
+                )
+            ],
+            tools=[],
+            tool_choice="auto",
+            config=GenerateConfig(),
+        )
+    finally:
+        await api.aclose()
+
+    assert body["prompt_cache_options"] == _EXPLICIT
+    parts = body["messages"][0]["content"]
+    assert parts[0]["prompt_cache_breakpoint"] == _EXPLICIT
+    assert "prompt_cache_breakpoint" not in parts[1]

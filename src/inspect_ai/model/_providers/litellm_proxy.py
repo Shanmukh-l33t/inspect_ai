@@ -830,8 +830,11 @@ class LiteLLMProxyAPI(OpenAICompatibleAPI):
 
     @override
     async def messages_to_openai(
-        self, input: list[ChatMessage]
+        self, input: list[ChatMessage], cache_breakpoints: bool = False
     ) -> list[ChatCompletionMessageParam]:
+        # cache markers come from `with_cache_breakpoints` (Anthropic-shaped
+        # cache_control); the base's explicit prompt-cache mode is never
+        # enabled for this provider, so the flag is not consulted here
         messages = await litellm_messages_to_openai(input)
         if self._vendor in (None, "google"):
             messages = with_tool_call_signatures(messages)
