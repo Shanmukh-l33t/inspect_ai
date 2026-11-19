@@ -155,10 +155,14 @@ _NUMERIC_PUNCTUATION_TRIM = "!?:;()[]{}'\"`！？：；（）［］｛｝＇＂�
 # Same marker vocabulary as the math() scorer (_math.py), so both scorers
 # announce a final answer the same way. The trailing "is\b|[:=]" keeps it
 # from firing on ordinary prose ("the answer is not known") and on
-# arithmetic ("9 * 2 = 18"), which is working, not an announced answer. No
-# IGNORECASE flag: the value is already casefolded when ignore_case is on,
-# and a caller who turned case folding off should not get it back here.
-_ANSWER_MARKER = re.compile(r"(?:final\s+answer|answer|result)\s*(?:is\b|[:=])\s*")
+# arithmetic ("9 * 2 = 18"), which is working, not an announced answer.
+#
+# Case-insensitive on purpose: the marker only decides where the numeric scan
+# starts, so it must not depend on ignore_case. That flag governs value/target
+# comparison (the casefold above), not marker detection, and an announced
+# answer written "ANSWER:" must still bound the scan for a case-sensitive
+# caller. Matching what math() does in _math.py.
+_ANSWER_MARKER = re.compile(r"(?i)(?:final\s+answer|answer|result)\s*(?:is\b|[:=])\s*")
 
 # Final answers wrapped in a LaTeX box, e.g. "\boxed{18}", "\fbox{18}", or a
 # bare "boxed{18}". Mirrors _BOX_START in _math.py.

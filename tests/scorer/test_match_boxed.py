@@ -104,6 +104,18 @@ async def test_unparseable_final_after_marker_does_not_fall_through():
 
 
 @pytest.mark.anyio
+async def test_uppercase_marker_bounds_the_scan_when_case_sensitive():
+    # marker detection must not depend on ignore_case: an unparseable "ANSWER:"
+    # has to bound the scan for a case-sensitive caller too, otherwise the
+    # reasoning number is graded in its place
+    scorer = match(numeric=True, ignore_case=False)
+    state = simple_task_state(model_output="Step: 18 apples.\nANSWER: unknown")
+    result = await scorer(state, Target(["18"]))
+
+    assert result.text == INCORRECT
+
+
+@pytest.mark.anyio
 async def test_answer_before_marker_still_graded():
     # "42 is the answer" carries no marker boundary, so the trailing words must
     # not suppress the number that precedes them
