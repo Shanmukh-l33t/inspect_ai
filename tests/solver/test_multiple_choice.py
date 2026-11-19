@@ -590,6 +590,33 @@ async def test_multiple_correct_with_latex_or_markdown_decoration(answer: str):
 @pytest.mark.parametrize(
     ("answer", "expected"),
     [
+        ("**ANSWER:** C", {"choice 3"}),
+        ("**Answer:** C", {"choice 3"}),
+        ("ANSWER: (C) Paris", {"choice 3"}),
+        ("ANSWER: **C) Paris**", {"choice 3"}),
+        ("ANSWER: `C`", {"choice 3"}),
+        ("ANSWER: $D", {"choice 4"}),
+        ("ANSWER: C", {"choice 3"}),
+        ("**ANSWER: C**", {"choice 3"}),
+    ],
+)
+@pytest.mark.anyio
+async def test_answer_label_and_letter_decoration(answer: str, expected: set[str]):
+    # Label emphasis, code ticks, the template's "$" sigil and "(C) Paris"
+    # parentheses all wrap a correct letter; parsing must still find it (#6535)
+    generate = generate_for_multiple_correct(answers=answer)
+    solver = multiple_choice()
+    state = simple_task_state(
+        choices=["choice 1", "choice 2", "choice 3", "choice 4"],
+        messages=[ChatMessageUser(content="What's the answer?", source="input")],
+    )
+    new_state = await solver(state=state, generate=generate)
+    assert choices_marked_correct(new_state.choices) == expected
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
         ("ANSWER: A * B", {"choice 1"}),
         ("ANSWER: A$B", {"choice 1"}),
         ("ANSWER: **A", set()),

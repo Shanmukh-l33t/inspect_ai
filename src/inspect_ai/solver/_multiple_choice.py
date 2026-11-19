@@ -99,13 +99,23 @@ def parse_answers(state: TaskState, multiple_correct: bool) -> set[str]:
         state.output.completion,
     )
     completion = re.sub(
-        r"\*\*\s*([A-Za-z\d](?:[A-Za-z\d ,]*[A-Za-z\d,])?)\s*\*\*", r"\1", completion
+        r"(?P<wrap>\*\*|__|\x60)\s*([A-Za-z\d](?:[A-Za-z\d ,)]*[A-Za-z\d,])?)\s*(?P=wrap)",
+        r"\2",
+        completion,
     )
     completion = re.sub(
         r"(?i)(^|[:,])(\s*)\(([A-Za-z\d])\)(?=\s*(?:,|\.|\n|\Z))",
         r"\1\2\3",
         completion,
     )
+    # Decoration around the label or the answer itself: our templates ask for
+    # "ANSWER: $LETTER", and models bold or backtick the label, copy the "$"
+    # literally, or write "ANSWER: (C) Paris".
+    completion = re.sub(
+        r"(?i)[*_\x60]{1,2}\s*(ANSWER\s*:)\s*[*_\x60]{1,2}", r"\1", completion
+    )
+    completion = re.sub(r"(?i)(ANSWER\s*:\s*)\x24", r"\1", completion)
+    completion = re.sub(r"(?i)(ANSWER\s*:\s*)[*_]*\(", r"\1", completion)
 
     # First check whether the string strictly ends with the expected answer
     # In this case, we're looking for a single line which contains the expected
