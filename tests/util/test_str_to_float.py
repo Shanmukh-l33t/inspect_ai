@@ -311,6 +311,24 @@ def test_chinese_units_with_chinese_digits(value: str, expected: float) -> None:
     assert unicode_number_to_float(value) == expected
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        # A lone digit after a unit is the next lower place: 一千五 = 1500.
+        ("一千五", 1_500.0),
+        ("两百五", 250.0),
+        ("两千三", 2_300.0),
+        ("一万五", 15_000.0),
+        ("三万二", 32_000.0),
+        # 零 keeps the digit in the ones place.
+        ("一千零五", 1_005.0),
+        ("一万零五", 10_005.0),
+    ],
+)
+def test_chinese_trailing_digit_after_unit(value: str, expected: float) -> None:
+    assert unicode_number_to_float(value) == expected
+
+
 @pytest.mark.parametrize("value", ["12.5万", "1,000万"])
 def test_chinese_unit_forms_still_rejected(value: str) -> None:
     # A decimal or a grouped number before a unit is not parsed; pin it so a

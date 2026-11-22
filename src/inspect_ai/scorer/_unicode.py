@@ -515,6 +515,10 @@ def _parse_chinese_integer_with_units(s: str) -> Optional[int]:
             if coeff is None or rest is None:
                 values.append(None)
             else:
+                # 一万五 reads as 15000: the lone digit fills the place below
+                # the large unit. A 零 keeps it in the ones place (一万零五).
+                if len(segment) == 1 and segment in _CH_DIGITS:
+                    rest *= unit // 10
                 values.append(coeff * unit + rest)
             continue
 
@@ -531,7 +535,7 @@ def _parse_chinese_integer_with_units(s: str) -> Optional[int]:
 
         left = segment[:max_idx].strip()
         right = segment[max_idx + 1 :].strip()
-        stack.append(("combine", "", max_val))
+        stack.append(("combine", right, max_val))
         stack.append(("eval", right, 0))
         stack.append(("eval", left, 0))
     return values[0]
@@ -542,6 +546,10 @@ def _parse_chinese_small_segment(s: str) -> Optional[int]:
     total = 0
     section = 0
     number = 0
+    last_unit = 0
+    after_unit = False
+    zero_since_unit = False
+    trailing_digit = False
 
     i = 0
     while i < len(s):
@@ -553,27 +561,43 @@ def _parse_chinese_small_segment(s: str) -> Optional[int]:
 
         if ch in _CH_ALT_TENS:
             section += _CH_ALT_TENS[ch]
+            after_unit = False
+            trailing_digit = False
             continue
 
         if ch in ("零", "〇", "○"):
+            zero_since_unit = True
+            after_unit = False
+            trailing_digit = False
             continue
 
         if ch in _CH_DIGITS:
             number = _CH_DIGITS[ch]
+            trailing_digit = after_unit and not zero_since_unit
+            after_unit = False
             continue
 
         d = _char_to_ascii_digit(ch)
         if d is not None:
             # Non-Chinese digits form a run: 12万 is 12×10⁴, not 2×10⁴.
             number = number * 10 + int(d)
+            after_unit = False
+            trailing_digit = False
             continue
 
         if ch in _CH_SMALL_UNITS:
             unit_val = _CH_SMALL_UNITS[ch]
             section += (number or 1) * unit_val
             number = 0
+            last_unit = unit_val
+            after_unit = True
+            zero_since_unit = False
+            trailing_digit = False
             continue
 
         return None
 
+    if trailing_digit:
+        # 一千五 reads as 1500: the lone digit fills the place below the unit.
+        number *= last_unit // 10
     return total + section + number
