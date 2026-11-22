@@ -15,6 +15,7 @@ from .environment import (
     SandboxUserUnsupportedError,
 )
 from .limits import (
+    OutputLimitExceededError,
     SandboxEnvironmentLimits,
     verify_read_file_size,
 )
@@ -179,12 +180,8 @@ class LocalSandboxEnvironment(SandboxEnvironment):
             )
         file = self._resolve_file(file)
         verify_read_file_size(file)
-        if text:
-            with open(file, "r", newline="", encoding="utf-8") as f:
-                return f.read()
-        else:
-            with open(file, "rb") as f:
-                return f.read()
+        data = _read_file_bytes(file, SandboxEnvironmentLimits.MAX_READ_FILE_SIZE)
+        return data.decode("utf-8") if text else data
 
     def default_polling_interval(self) -> float:
         return 0.2
@@ -195,6 +192,35 @@ class LocalSandboxEnvironment(SandboxEnvironment):
             return file
         else:
             return (Path(self.directory.name) / Path(file)).as_posix()
+
+
+_READ_CHUNK_SIZE = 1024 * 1024
+
+
+def _read_file_bytes(file: str, limit: int) -> bytes:
+    """Read a file, raising if it holds more than limit bytes.
+
+    The stat check in `verify_read_file_size()` cannot bound the read: a proc
+    entry, a device, or a file that grows after the check reports a length that
+    is not its size. Read at most limit + 1 bytes instead.
+
+    Raises:
+      OutputLimitExceededError: If the file exceeds the limit.
+    """
+    data = bytearray()
+    with open(file, "rb") as f:
+        while len(data) <= limit:
+            chunk = f.read(min(_READ_CHUNK_SIZE, limit + 1 - len(data)))
+            if not chunk:
+                break
+            data += chunk
+    if len(data) > limit:
+        raise OutputLimitExceededError(
+            limit_str=SandboxEnvironmentLimits.MAX_READ_FILE_SIZE_STR,
+            # The potentially large, and potentially binary content is not included.
+            truncated_output=None,
+        )
+    return bytes(data)
 
 
 def _is_current_user(user: str) -> bool:

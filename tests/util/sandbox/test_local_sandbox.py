@@ -1,4 +1,5 @@
 import os
+import threading
 import warnings
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -7,6 +8,10 @@ import pytest
 
 from inspect_ai.util import SandboxUserUnsupportedError
 from inspect_ai.util._sandbox._cli import SANDBOX_CLI
+from inspect_ai.util._sandbox.limits import (
+    OutputLimitExceededError,
+    override_max_read_file_size,
+)
 from inspect_ai.util._sandbox.local import LocalSandboxEnvironment
 from inspect_ai.util._subprocess import ExecResult
 
@@ -257,3 +262,55 @@ async def test_sample_cleanup_continues_after_server_stop_failure(
         "Failed to stop local sandbox-tools server: %s",
         failing_stop.side_effect,
     )
+
+
+@pytest.mark.parametrize("size, exceeds_limit", [(16, False), (17, True)])
+async def test_local_read_file_bounds_bytes_read_from_pipe(
+    tmp_path: Path, size: int, exceeds_limit: bool
+) -> None:
+    if os.name != "posix":
+        pytest.skip("requires a named pipe")
+    pipe = tmp_path / "pipe"
+    os.mkfifo(pipe)
+    data = b"a\r\nb" + b"x" * (size - 4)
+
+    def write() -> None:
+        try:
+            with open(pipe, "wb") as f:
+                for byte in data:
+                    f.write(bytes([byte]))
+                    f.flush()
+        except OSError:
+            pass  # the reader closes the pipe once the limit is exceeded
+
+    writer = threading.Thread(target=write)
+    writer.start()
+    sandbox = LocalSandboxEnvironment()
+    try:
+        with override_max_read_file_size(16):
+            if exceeds_limit:
+                with pytest.raises(OutputLimitExceededError):
+                    await sandbox.read_file(str(pipe))
+            else:
+                assert await sandbox.read_file(str(pipe)) == data.decode()
+    finally:
+        writer.join(timeout=5)
+        sandbox.directory.cleanup()
+    assert not writer.is_alive()
+
+
+@pytest.mark.skipif(not Path("/proc/cpuinfo").exists(), reason="requires /proc")
+async def test_local_read_file_symlink_to_proc_entry_enforces_limit(
+    tmp_path: Path,
+) -> None:
+    link = tmp_path / "report.txt"
+    link.symlink_to("/proc/cpuinfo")
+    sandbox = LocalSandboxEnvironment()
+    try:
+        with override_max_read_file_size(1024):
+            with pytest.raises(OutputLimitExceededError):
+                await sandbox.read_file(str(link))
+            with pytest.raises(OutputLimitExceededError):
+                await sandbox.read_file(str(link), text=False)
+    finally:
+        sandbox.directory.cleanup()
