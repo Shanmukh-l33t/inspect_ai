@@ -329,6 +329,14 @@ def test_chinese_trailing_digit_after_unit(value: str, expected: float) -> None:
     assert unicode_number_to_float(value) == expected
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="elided 万 after 亿 (一亿二千五 = 一亿二千五百万) is not handled yet, see #6574",
+)
+def test_chinese_elided_wan_after_yi() -> None:
+    assert unicode_number_to_float("一亿二千五") == 125_000_000.0
+
+
 @pytest.mark.parametrize("value", ["12.5万", "1,000万"])
 def test_chinese_unit_forms_still_rejected(value: str) -> None:
     # A decimal or a grouped number before a unit is not parsed; pin it so a
